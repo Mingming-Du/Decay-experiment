@@ -1,0 +1,61 @@
+# df1 <- read.csv(
+#   "C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/4.1/rarefy/asv_table.csv",
+#   row.names = 1,            # Use the first column as row names
+#   check.names = FALSE       # Keep original column names
+# )
+
+df1 <- read.csv(
+  "C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/PeerJ/table/original/asv_table.csv",
+  row.names = 1, check.names = FALSE
+)
+
+# Assume df1 has rows = samples, columns = ASVs, values = read counts (non-negative integers)
+stopifnot(is.data.frame(df1))
+stopifnot(!is.null(rownames(df1)))
+
+# 1) Relative abundance matrix (normalize each sample row to 1)
+row_sums <- rowSums(df1, na.rm = TRUE)
+# Avoid division by zero if a sample has all zero counts
+row_sums[row_sums == 0] <- NA_real_
+
+rel <- sweep(df1, 1, row_sums, "/")  # Relative abundance (0–1)
+# If there are all-zero samples, NA values may appear; optionally replace:
+# rel[is.na(rel)] <- 0
+
+# 2) Thresholds (in proportions; 0.1% = 0.001, 0.01% = 0.0001)
+thr_abund <- 0.001   # 0.1%
+thr_rare  <- 0.0001  # 0.01%
+
+# Per-sample × ASV masks
+mask_abund <- rel >= thr_abund
+mask_rare  <- rel <  thr_rare
+
+# 2a) Raw read counts version (set non-qualifying cells to 0)
+abundant_reads <- df1
+abundant_reads[!mask_abund] <- 0
+
+rare_reads <- df1
+rare_reads[!mask_rare] <- 0
+
+# Function to drop ASV columns with zero total counts
+drop_zero_cols <- function(x) {
+  keep <- colSums(x, na.rm = TRUE) > 0
+  message(sum(!keep), " columns dropped; ", sum(keep), " kept.")
+  x[, keep, drop = FALSE]
+}
+
+abundant_reads <- drop_zero_cols(abundant_reads)
+rare_reads     <- drop_zero_cols(rare_reads)
+
+# Output directory (use forward slashes for convenience)
+out_dir <- "C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/PeerJ/table"
+if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
+# Save both tables (keep row names = sample names)
+write.csv(abundant_reads,
+          file = file.path(out_dir, "abundant_ASV_reads_per_sample.csv"),
+          row.names = TRUE, quote = FALSE)
+
+write.csv(rare_reads,
+          file = file.path(out_dir, "rare_ASV_reads_per_sample.csv"),
+          row.names = TRUE, quote = FALSE)
