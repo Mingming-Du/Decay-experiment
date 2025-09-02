@@ -1,0 +1,136 @@
+mygroup <- read.csv("C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/PeerJ/table/final_alpha_diversity_with_groups.csv")
+
+colnames(mygroup)
+
+# Required packages
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(scales)
+
+# Recode factor levels
+mygroup <- mygroup %>%
+  mutate(Soil = factor(Soil,
+                       levels = c("A","B","C"),
+                       labels = c("Silty loam","Sandy","Clay loam")))
+mygroup <- mygroup %>%
+  mutate(
+    Storage = as.character(Storage),
+    Storage = ifelse(Storage %in% c("-20", "4"),
+                     paste0(Storage, "°C"), Storage),
+    Storage = factor(Storage, levels = c("-20°C","4°C","RTAD","RTFM"))
+  )
+
+# Data preparation
+library(dplyr); library(readr); library(forcats)
+
+dat <- mygroup %>%
+  mutate(
+    Time_num = parse_number(as.character(Time)),
+    Soil     = factor(Soil),
+    Storage  = fct_relevel(as.factor(Storage), "-20°C","4°C","RTAD","RTFM")
+  )
+
+# ---- Mixed model + AR(1) ----
+if (!requireNamespace("nlme", quietly = TRUE)) install.packages("nlme")
+library(nlme)
+
+fit_ar1 <- lme(
+  Shannon_total ~ Storage * Time_num,
+  # random = ~ 1 + Time_num | Soil,   # Soil random intercept + slope
+  random = ~ 1 | Soil,                # Only random intercept for Soil
+  # correlation = corAR1(form = ~ Time_num | Soil/Storage), # AR(1) within Soil × Storage
+  data = dat
+)
+anova(fit_ar1)
+
+# Type "marginal" ≈ Type III: marginal tests for each fixed effect
+tab <- anova(fit_ar1, type = "marginal")
+print(tab)
+
+# Extract p-values to display on plot
+getp <- function(nm) ifelse(nm %in% rownames(tab), signif(tab[nm,"p-value"], 3), NA)
+p_storage <- getp("Storage")
+p_time    <- getp("Time_num")
+p_int     <- getp("Storage:Time_num")
+lab_txt   <- paste0("Storage: p=", p_storage,
+                    "\nTime: p=", p_time,
+                    "\nStorage×Time: p=", p_int)
+
+# ---- Mean ± SE (ignoring Soil, treating it as replicate) ----
+df_sum <- dat %>%
+  group_by(Storage, Time_num) %>%
+  summarise(
+    mean_shan = mean(Shannon_total, na.rm = TRUE),
+    sd  = sd(Shannon_total, na.rm = TRUE),
+    n   = dplyr::n(),
+    se  = sd / sqrt(n),
+    .groups = "drop"
+  )
+
+# ---- Plot with overall test annotation ---- 
+library(ggplot2); library(scales)
+brks <- c(1,3,7,14,28)
+y_top <- max(df_sum$mean_shan + df_sum$se, na.rm = TRUE)
+
+p1 <- ggplot(df_sum, aes(x = Time_num, y = mean_shan, colour = Storage)) +
+  geom_line(aes(group = Storage), linewidth = 1) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean_shan - se, ymax = mean_shan + se), width = 0.3) +
+  scale_x_continuous("Time", breaks = brks) +
+  ylab("Shannon_total diversity") +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.2))) +
+  theme_classic(base_size = 12) +
+  theme(
+    legend.position = "top",
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.8),
+    axis.line = element_blank()
+  ) +
+  annotate("text", x = max(df_sum$Time_num), y = y_top, hjust = 1, vjust = 0, label = lab_txt)
+p1
+
+########## Boxplot ##########
+colnames(mygroup)
+library(dplyr)
+library(ggplot2)
+library(forcats)
+
+p_box <- ggplot(dat, aes(x = Storage, y = Shannon_total, fill = Storage)) +
+  geom_boxplot(width = 0.65, outlier.shape = NA, linewidth = 0.6) +
+  labs(x = "Storage", y = "Shannon_total diversity") +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.08))) +
+  theme_classic(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.8),
+    axis.line = element_blank()
+  )
+
+p_box
+
+# ---- Model fitting and post-hoc tests ----
+colnames(mygroup)
+
+# Mixed model (simplified)
+fit <- lme(Shannon_total ~ Storage + Time_num, random = ~ 1 | Soil, data = dat)
+anova(fit, type = "marginal")   # Overall test for Storage
+
+# Post-hoc comparisons:
+# If variances are homogeneous and distribution is ~normal: classical ANOVA + Tukey
+fit <- aov(Shannon_total ~ Storage, data = dat)
+summary(fit)
+TukeyHSD(fit)
+
+# Diagnostic plots:
+# Residual vs fitted (should not show strong funnel shape)
+# plot(aov(Shannon_total ~ Storage, data = dat), which = 1)
+
+# Levene’s test (recommended, robust for variance homogeneity)
+# library(car)
+# leveneTest(Shannon_total ~ Storage, data = dat)   # p > 0.05 means equal variances
+
+# Brown–Forsythe test (centered at median, more robust)
+# car::leveneTest(Shannon_total ~ Storage, data = dat, center = median)
+
+# Bartlett test (very sensitive to non-normality, not recommended)
+# bartlett.test(Shannon_total ~ Storage, data = dat)
