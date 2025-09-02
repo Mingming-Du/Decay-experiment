@@ -1,0 +1,145 @@
+out_dir <- "C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/PeerJ/table"
+abundant_reads <- read.csv(file.path(out_dir, "abundant_ASV_reads_per_sample.csv"),
+                           row.names = 1, check.names = FALSE)
+rare_reads  <- read.csv(file.path(out_dir, "rare_ASV_reads_per_sample.csv"),
+                        row.names = 1, check.names = FALSE)
+total_reads <- read.csv(
+  "C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/PeerJ/table/original/asv_table.csv",
+  row.names = 1,            # Use the first column as row names
+  check.names = FALSE       # Keep column names unchanged
+)
+mygroup <- read.csv("C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/PeerJ/table/final_alpha_diversity_with_groups.csv",
+                    row.names = 1, check.names = FALSE)
+tax <- read.csv(
+  "C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/PeerJ/table/original/tax_table.csv",
+  row.names = 1,            # Use the first column as row names
+  check.names = FALSE       # Keep column names unchanged
+)
+
+# ---- Packages ----
+if (!requireNamespace("tidyverse", quietly = TRUE)) install.packages("tidyverse")
+if (!requireNamespace("ggh4x", quietly = TRUE)) install.packages("ggh4x")
+library(tidyverse)
+library(ggh4x)
+
+# ----------------------------- CONFIG ---------------------------------
+tax_col  <- "Phylum"  # can be changed to "Class", "Order", "Genus", etc.
+top_n    <- 10
+
+# ---- Clean metadata (Soil, Storage, Time order) ----
+meta <- mygroup %>%
+  rownames_to_column("Sample") %>%
+  mutate(
+    Soil = factor(Soil, levels = c("A","B","C"),
+                  labels = c("Silty loam","Sandy","Clay loam")),
+    Storage = as.character(Storage),
+    Storage = if_else(Storage %in% c("-20","4"), paste0(Storage, "°C"), Storage),
+    Storage = factor(Storage, levels = c("-20°C","4°C","RTAD","RTFM")),
+    Time_num = readr::parse_number(as.character(Time))
+  )
+colnames(mygroup)
+
+# ---- Long-format ASV table ----
+asv_long <- rare_reads %>%
+  rownames_to_column("Sample") %>%
+  pivot_longer(-Sample, names_to = "ASV", values_to = "Reads") %>%
+  filter(Reads > 0)
+
+# ---- Taxonomy (select rank of interest) ----
+rank_col <- names(tax)[tolower(names(tax)) == tolower(tax_col)][1]
+stopifnot(!is.na(rank_col))  # must exist in taxonomy table
+
+tax_rank <- tax %>%
+  rownames_to_column("ASV") %>%
+  select(ASV, Rank = all_of(rank_col)) %>%
+  mutate(Rank = if_else(is.na(Rank) | Rank == "", "Unassigned", as.character(Rank)))
+
+# ---- Join counts + taxonomy + metadata ----
+dat <- asv_long %>%
+  left_join(tax_rank, by = "ASV") %>%
+  left_join(meta %>% select(Sample, Soil, Storage, Time, Time_num), by = "Sample")
+
+# ---- Collapse to relative abundance per sample at chosen rank ----
+rel <- dat %>%
+  group_by(Sample, Soil, Storage, Time, Time_num, Rank) %>%
+  summarise(Reads = sum(Reads), .groups = "drop_last") %>%
+  mutate(RelAbund = 100 * Reads / sum(Reads)) %>%
+  ungroup()
+
+# ---- Keep Top-N ranks globally; assign others as "Others" ----
+top_levels <- rel %>%
+  group_by(Rank) %>%
+  summarise(meanRA = mean(RelAbund, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(meanRA)) %>%
+  slice_head(n = top_n) %>%
+  pull(Rank)
+
+rel2 <- rel %>%
+  mutate(Rank2 = if_else(Rank %in% top_levels, Rank, "Others"),
+         Rank2 = fct_relevel(Rank2, setdiff(top_levels, "Others"), "Others"))
+
+# ---- Define sample plotting order and time labels ----
+library(dplyr)
+library(forcats)
+library(ggh4x)
+library(ggplot2)
+library(grid)  # for unit()
+
+# 1) Fix Time order
+meta <- meta %>%
+  mutate(Time_num = factor(Time_num, levels = c(1, 3, 7, 14, 28), ordered = TRUE))
+
+# 2) Within each Soil: order by Storage → Time → Sample; keep ordering and time labels only
+order_df <- meta %>%
+  arrange(Soil, Storage, Time_num, Sample) %>%
+  mutate(
+    Sample_order = factor(Sample, levels = unique(Sample)),
+    Time_lab     = as.character(Time_num)
+  ) %>%
+  select(Sample, Sample_order, Time_lab)
+
+# 3) Merge ordering info back into rel2
+rel_plot <- rel2 %>%
+  left_join(order_df, by = "Sample")
+
+# In case Soil column conflicts exist, clean up (optional safeguard)
+if (!"Soil" %in% names(rel_plot)) {
+  rel_plot <- rel_plot %>%
+    mutate(Soil = dplyr::coalesce(.data$Soil.x, .data$Soil.y)) %>%
+    select(-tidyselect::matches("^Soil\\.(x|y)$"))
+}
+
+# 4) Construct nested axis labels: first row = Time, second row = Storage
+axis_map <- order_df %>%
+  left_join(meta %>% select(Sample, Storage), by = "Sample") %>%
+  distinct(Sample_order, Time_lab, Storage) %>%
+  arrange(Sample_order)
+
+lab_time    <- setNames(axis_map$Time_lab,    axis_map$Sample_order)
+lab_storage <- setNames(as.character(axis_map$Storage), axis_map$Sample_order)
+
+# 5) Plot relative abundance barplots: facet by Soil, nested by Storage
+p_total <- ggplot(rel_plot, aes(x = Sample_order, y = RelAbund, fill = Rank2)) +
+  geom_col(width = 0.9) +
+  ggh4x::facet_nested(
+    ~ Soil + Storage,
+    scales = "free_x", space = "free_x", switch = "x",
+    nest_line = element_blank()  # no connecting lines, cleaner strips
+  ) +
+  # X-axis shows only Time (Storage is displayed in strip above)
+  scale_x_discrete(labels = lab_time) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.02)), limits = c(0, 100)) +
+  labs(x = NULL, y = "Relative abundance (%)", fill = tax_col) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.spacing.x    = unit(0, "mm"),      # reduce spacing between facets (Storage looks continuous)
+    strip.placement    = "outside",
+    strip.text.x       = element_text(face = "bold"),
+    axis.text.x        = element_text(size = 8),
+    legend.position    = "right",
+    panel.border       = element_blank()     # remove facet borders
+  )
+
+p_total
