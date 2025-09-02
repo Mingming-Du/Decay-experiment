@@ -1,0 +1,109 @@
+# ---- Paths & Required Packages ----
+out_dir <- "C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/PeerJ/table"
+
+# tree_path <- "C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/4.1/tree.nwk"
+abundant_reads <- read.csv(file.path(out_dir, "abundant_ASV_reads_per_sample.csv"),
+                           row.names = 1, check.names = FALSE)
+rare_reads  <- read.csv(file.path(out_dir, "rare_ASV_reads_per_sample.csv"),
+                        row.names = 1, check.names = FALSE)
+total_reads <- read.csv(
+  "C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/PeerJ/table/original/asv_table.csv",
+  row.names = 1,            # Use first column as row names
+  check.names = FALSE       # Keep original column names
+)
+mygroup <- read.csv("C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/4.1/rarefy/sam_table.csv",
+                    row.names = 1, check.names = FALSE)
+colnames(mygroup)
+library(vegan)
+
+# --- Step 2: Calculate Alpha Diversity for "abundant_reads" ---
+
+# Observed, Shannon, Chao1, and ACE
+# estimateR provides Observed, Chao1, and ACE indices
+richness_abundant <- estimateR(abundant_reads)
+shannon_abundant <- diversity(abundant_reads, index = "shannon")
+
+# Combine results into a dataframe
+# t() transposes the matrix so sample IDs are rows and indices are columns
+alpha_diversity_abundant <- data.frame(
+  t(richness_abundant),
+  Shannon = shannon_abundant
+)
+
+# --- Step 3: Calculate Alpha Diversity for "rare_reads" ---
+
+richness_rare <- estimateR(rare_reads)
+shannon_rare <- diversity(rare_reads, index = "shannon")
+
+# Combine results
+alpha_diversity_rare <- data.frame(
+  t(richness_rare),
+  Shannon = shannon_rare
+)
+
+# --- Step 4: Calculate Alpha Diversity for "total_reads" ---
+
+richness_total <- estimateR(total_reads)
+shannon_total <- diversity(total_reads, index = "shannon")
+
+# Combine results
+alpha_diversity_total <- data.frame(
+  t(richness_total),
+  Shannon = shannon_total
+)
+
+# --- Step 1: Add suffixes to each alpha diversity table to distinguish them ---
+
+# Add "_abundant" suffix
+colnames(alpha_diversity_abundant) <- paste0(colnames(alpha_diversity_abundant), "_abundant")
+
+# Add "_rare" suffix
+colnames(alpha_diversity_rare) <- paste0(colnames(alpha_diversity_rare), "_rare")
+
+# Add "_total" suffix
+colnames(alpha_diversity_total) <- paste0(colnames(alpha_diversity_total), "_total")
+
+# --- Step 2: Merge the three alpha diversity tables ---
+
+# First merge abundant and rare (by row names = Sample IDs)
+merged_alpha_1 <- merge(alpha_diversity_abundant, alpha_diversity_rare, by = "row.names")
+# After merging, row names become a column called "Row.names"; rename to "SampleID"
+colnames(merged_alpha_1)[1] <- "SampleID"
+
+# Second merge: add the total table
+all_alpha_diversity <- merge(merged_alpha_1, alpha_diversity_total, by.x = "SampleID", by.y = "row.names")
+
+# --- Step 3: Prepare mygroup data ---
+# Extract required columns
+mygroup_subset <- mygroup[, c("Soil", "Time", "Storage")]
+
+# --- Step 4: Merge alpha diversity results with mygroup subset ---
+final_table <- merge(all_alpha_diversity, mygroup_subset, by.x = "SampleID", by.y = "row.names")
+
+# Set SampleID as row names (useful for later analysis)
+rownames(final_table) <- final_table$SampleID
+# Remove extra SampleID column
+final_table$SampleID <- NULL
+
+# --- Step 5: Inspect final merged table ---
+cat("--- Final merged table --- \n")
+# Preview the first few rows
+head(final_table)
+
+# Show structure of the dataframe
+str(final_table)
+
+# --- Save final table to CSV ---
+
+# Define file path
+output_path <- "C:/Users/midu6195/OneDrive - The University of Sydney (Staff)/PhD project/Research-1-soil DNA extraction/PeerJ/table/final_alpha_diversity_with_groups.csv"
+
+# Save with row names = Sample IDs
+write.csv(final_table, file = output_path, row.names = TRUE)
+
+# Confirmation message
+cat("File successfully saved to:\n", output_path, "\n")
+
+# --- Optional: Save to current working directory as well ---
+# write.csv(final_table, "final_alpha_diversity_with_groups.csv")
+
